@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>歌枠ビジュアライザー</title>
+<style>
+  :root {
+    /* ===== ブランドカラー（深紅×黒・ゴシック） ===== */
+    --crimson-bright: #ff1744;
+    --crimson:        #c8102e;
+    --crimson-deep:   #8b0000;
+    --bg-core:        #1a0307;
+    --bg-edge:        #05010280;
+    --spark:          #ffd0dc;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: "Segoe UI", system-ui, sans-serif;
+    cursor: default;
+  }
+
+  /* 背景モード（透過のときはどちらのクラスも付けない） */
+  body.bg-dark {
+    background:
+      radial-gradient(ellipse 90% 70% at 50% 55%, var(--bg-core) 0%, #0a0103 60%, #050102 100%);
+  }
+  body.bg-light {
+    background:
+      radial-gradient(ellipse 95% 75% at 50% 55%, #ffffff 0%, #f4f1f7 62%, #e8e4ee 100%);
+  }
+
+  #stage { position: fixed; inset: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+  /* ===== コントロールパネル ===== */
+  #hud {
+    position: fixed; top: 16px; left: 16px; z-index: 10;
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 16px 18px;
+    background: rgba(20, 4, 8, 0.82);
+    border: 1px solid rgba(255, 23, 68, 0.35);
+    border-radius: 14px;
+    backdrop-filter: blur(8px);
+    box-shadow: 0 0 24px rgba(200, 16, 46, 0.25);
+    color: #ffe;
+    width: 248px;
+    transition: opacity .3s, transform .3s;
+  }
+  #hud.hidden { opacity: 0; transform: translateX(-16px); pointer-events: none; }
+
+  #hud h1 { font-size: 13px; letter-spacing: .08em; color: var(--crimson-bright); font-weight: 700; }
+  #hud .row { display: flex; align-items: center; justify-content: space-between; font-size: 12px; gap: 8px; }
+  #hud button {
+    cursor: pointer; border: none; border-radius: 8px; padding: 9px 12px;
+    font-size: 12px; font-weight: 700; color: #fff;
+    background: linear-gradient(135deg, var(--crimson) 0%, var(--crimson-deep) 100%);
+    box-shadow: 0 2px 10px rgba(200,16,46,.4);
+    transition: filter .15s;
+  }
+  #hud button:hover { filter: brightness(1.2); }
+  #hud button.ghost { background: rgba(255,255,255,.08); box-shadow: none; border: 1px solid rgba(255,255,255,.15); }
+  #hud input[type=range] { width: 100%; accent-color: var(--crimson-bright); }
+  #hud select {
+    background: #2a0810; color: #fff; border: 1px solid rgba(255,23,68,.4);
+    border-radius: 6px; padding: 4px 6px; font-size: 12px;
+  }
+
+  /* ボタン式コントロール（OBS Interactでも操作可能） */
+  #hud .sec { display: flex; flex-direction: column; gap: 6px; }
+  #hud .sec > label { font-size: 11px; opacity: .75; }
+  #hud .seg { display: flex; flex-wrap: wrap; gap: 5px; }
+  #hud .seg button {
+    flex: 1 1 auto; min-width: 52px; padding: 7px 6px;
+    background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14);
+    border-radius: 7px; color: #f2dde2; font-size: 12px; font-weight: 600;
+    box-shadow: none; cursor: pointer; transition: all .12s;
+  }
+  #hud .seg button:hover { background: rgba(255,255,255,.14); }
+  #hud .seg button.on {
+    background: linear-gradient(135deg, var(--crimson) 0%, var(--crimson-deep) 100%);
+    border-color: var(--crimson-bright); color: #fff;
+    box-shadow: 0 0 10px rgba(200,16,46,.5);
+  }
+  #hud .swatches { display: flex; flex-wrap: wrap; gap: 8px; }
+  #hud .swatches button {
+    width: 26px; height: 26px; padding: 0; border-radius: 50%;
+    background: var(--c); border: 2px solid rgba(255,255,255,.25);
+    box-shadow: 0 0 6px var(--c); cursor: pointer; transition: transform .12s, border-color .12s;
+  }
+  #hud .swatches button:hover { transform: scale(1.15); }
+  #hud .swatches button.on { border-color: #fff; transform: scale(1.18); box-shadow: 0 0 12px var(--c); }
+  #status { font-size: 11px; opacity: .8; min-height: 14px; }
+  #gear {
+    position: fixed; top: 16px; left: 16px; z-index: 11;
+    width: 38px; height: 38px; border-radius: 50%;
+    background: rgba(20,4,8,.82); border: 1px solid rgba(255,23,68,.35);
+    color: var(--crimson-bright); font-size: 18px; cursor: pointer;
+    display: none; align-items: center; justify-content: center;
+  }
+</style>
+</head>
+<body class="bg-dark">
+  <div id="stage">
+    <canvas id="c"></canvas>
+  </div>
+
+  <button id="gear" title="設定">⚙</button>
+
+  <div id="hud">
+    <h1>歌枠ビジュアライザー</h1>
+    <button id="micBtn">🎤 マイクを有効にする</button>
+
+    <div class="sec">
+      <label>形状</label>
+      <div class="seg" id="shape">
+        <button data-v="circular" class="on">円形</button>
+        <button data-v="bars">バー</button>
+        <button data-v="mirror">ミラー</button>
+        <button data-v="wave">波形</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <label>配色テーマ</label>
+      <div class="swatches" id="theme">
+        <button data-v="crimson" class="on" style="--c:#ff1744" title="深紅"></button>
+        <button data-v="aqua"    style="--c:#29e0ff" title="蒼"></button>
+        <button data-v="gold"    style="--c:#ffd54a" title="金"></button>
+        <button data-v="sakura"  style="--c:#ff8fb3" title="桜ピンク"></button>
+        <button data-v="violet"  style="--c:#b86bff" title="紫"></button>
+        <button data-v="emerald" style="--c:#3cffb0" title="翠"></button>
+        <button data-v="mono"    style="--c:#dddddd" title="モノクロ"></button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <label>感度</label>
+      <input id="gain" type="range" min="0.5" max="6" step="0.1" value="1.4">
+    </div>
+
+    <div class="sec">
+      <label>パーティクル</label>
+      <div class="seg" id="particle">
+        <button data-v="heart">ハート</button>
+        <button data-v="star">スター</button>
+        <button data-v="both" class="on">ミックス</button>
+        <button data-v="none">なし</button>
+      </div>
+    </div>
+
+    <div class="sec">
+      <label>背景</label>
+      <div class="seg" id="bgmode">
+        <button data-v="dark" class="on">ダーク</button>
+        <button data-v="light">白</button>
+        <button data-v="transparent">透過</button>
+      </div>
+    </div>
+
+    <button id="hideBtn" class="ghost">パネルを隠す（OBS用）</button>
+    <div id="status">デモモードで動作中…</div>
+  </div>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const statusEl = document.getElementById('status');
+
+  // ---- 設定 ----
+  // ===== 配色テーマ =====
+  // bright/mid/deep/spark: 線・塗りの色 / core: 背景グロー(rgb) / grid: 菱形グリッド(rgb) / ring: コアリング(rgb)
+  const THEMES = {
+    crimson: { name:'深紅',     bright:'#ff1744', mid:'#c8102e', deep:'#8b0000', spark:'#ffd0dc', core:'139,0,0',   grid:'200,16,46',  ring:'255,23,68'  },
+    aqua:    { name:'蒼',       bright:'#29e0ff', mid:'#0a9cc8', deep:'#074a78', spark:'#d0f4ff', core:'0,90,140',  grid:'20,140,200', ring:'41,224,255' },
+    gold:    { name:'金',       bright:'#ffd54a', mid:'#e0a020', deep:'#8a5a00', spark:'#fff4d0', core:'150,95,0',  grid:'200,150,40', ring:'255,213,74' },
+    sakura:  { name:'桜ピンク', bright:'#ff8fb3', mid:'#ff5e96', deep:'#c84f7a', spark:'#ffe3ee', core:'150,40,80', grid:'230,150,180',ring:'255,143,179'},
+    violet:  { name:'紫',       bright:'#b86bff', mid:'#8a3ce0', deep:'#4a1f88', spark:'#ecd9ff', core:'90,30,160', grid:'150,80,220', ring:'184,107,255'},
+    emerald: { name:'翠',       bright:'#3cffb0', mid:'#14c884', deep:'#0a6a4a', spark:'#d0ffe8', core:'10,120,80', grid:'40,200,140', ring:'60,255,176' },
+    mono:    { name:'モノクロ', bright:'#ffffff', mid:'#c8c8d2', deep:'#6a6a78', spark:'#ffffff', core:'90,90,110', grid:'180,180,200',ring:'255,255,255'}
+  };
+
+  const CFG = {
+    bars: 96,            // スペクトラムの本数
+    sensitivity: 1.4,
+    shape: 'circular',   // circular | bars | mirror | wave
+    theme: 'crimson',
+    bgMode: 'dark',      // dark | light | transparent
+    particleType: 'both',
+    colors: {},          // applyThemeで設定
+    core: '139,0,0', grid: '200,16,46', ring: '255,23,68'
+  };
+
+  function applyTheme(key) {
+    const tm = THEMES[key] || THEMES.crimson;
+    CFG.theme = key;
+    CFG.colors = { bright: tm.bright, mid: tm.mid, deep: tm.deep, spark: tm.spark };
+    CFG.core = tm.core; CFG.grid = tm.grid; CFG.ring = tm.ring;
+  }
+  applyTheme('crimson');
+
+  function setBg(mode) {
+    CFG.bgMode = (mode === 'light' || mode === 'transparent') ? mode : 'dark';
+    document.body.classList.toggle('bg-dark', CFG.bgMode === 'dark');
+    document.body.classList.toggle('bg-light', CFG.bgMode === 'light');
+  }
+
+  // ---- キャンバスサイズ（高解像度対応） ----
+  let W = 0, H = 0, DPR = 1, CX = 0, CY = 0;
+  function resize() {
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    CX = W / 2; CY = H * 0.56;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---- オーディオ解析 ----
+  let analyser = null, freq = null, timeData = null, audioCtx = null, micActive = false;
+  const BIN = 256;
+
+  let micStream = null;
+  async function enableMic() {
+    try {
+      statusEl.textContent = 'マイク接続中…';
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      // 自動再生ポリシーでsuspendされる場合があるためresume
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      // 既存ストリームがあれば一度停止して張り直す
+      if (micStream) micStream.getTracks().forEach(t => t.stop());
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: {
+        echoCancellation: false, noiseSuppression: false, autoGainControl: false
+      }});
+      const src = audioCtx.createMediaStreamSource(micStream);
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = BIN;
+      analyser.smoothingTimeConstant = 0.8;
+      src.connect(analyser);
+      freq = new Uint8Array(analyser.frequencyBinCount);
+      timeData = new Uint8Array(analyser.fftSize);
+      micActive = true;
+      document.getElementById('micBtn').textContent = '🎤 マイク反応中（再接続）';
+      statusEl.textContent = '🎤 マイク入力に反応中';
+    } catch (e) {
+      micActive = false;
+      statusEl.textContent = '⚠ マイクを利用できません（デモ継続）';
+    }
+  }
+  // タブ復帰時にAudioContextが止まることがあるので復帰
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+  });
+
+  // デモ用の擬似スペクトラム生成
+  let t = 0;
+  function demoSpectrum(arr) {
+    t += 0.016;
+    for (let i = 0; i < arr.length; i++) {
+      const n = i / arr.length;
+      const beat = Math.pow(Math.max(0, Math.sin(t * 2.0)), 6) * 90;
+      const wave = Math.sin(t * 3 + i * 0.25) * 0.5 + 0.5;
+      const lowBoost = (1 - n) * (1 - n) * 120;
+      const flicker = (Math.sin(t * 9 + i) * 0.5 + 0.5) * 25;
+      arr[i] = Math.min(255, lowBoost * wave + beat * (1 - n) + flicker);
+    }
+  }
+
+  // デモ用の擬似波形（時間領域、中心128）
+  function demoWave(arr) {
+    for (let i = 0; i < arr.length; i++) {
+      const p = i / arr.length;
+      const env = Math.pow(Math.max(0, Math.sin(t * 2.0)), 4) * 0.6 + 0.2;
+      const s = Math.sin(p * Math.PI * 8 + t * 6) * env
+              + Math.sin(p * Math.PI * 20 + t * 11) * env * 0.4;
+      arr[i] = Math.max(0, Math.min(255, 128 + s * 110));
+    }
+  }
+
+  // ---- パーティクル（ハート / スター） ----
+  const particles = [];
+  function spawnParticle(energy) {
+    if (CFG.particleType === 'none') return;
+    let kind = CFG.particleType;
+    if (kind === 'both') kind = Math.random() < 0.5 ? 'heart' : 'star';
+    particles.push({
+      x: CX + (Math.random() - 0.5) * W * 0.7,
+      y: H + 20,
+      vy: -(1.2 + Math.random() * 2.4 + energy * 3),
+      vx: (Math.random() - 0.5) * 0.8,
+      size: 8 + Math.random() * 14 + energy * 10,
+      rot: Math.random() * Math.PI,
+      vr: (Math.random() - 0.5) * 0.05,
+      alpha: 0,
+      life: 0, maxLife: 180 + Math.random() * 120,
+      kind,
+      // 白背景ではsparkが飛ぶのでmid/deep寄りにして視認性を確保
+      hue: CFG.bgMode === 'light'
+        ? (Math.random() < 0.5 ? CFG.colors.mid : (Math.random() < 0.5 ? CFG.colors.bright : CFG.colors.deep))
+        : (Math.random() < 0.3 ? CFG.colors.spark : (Math.random() < 0.5 ? CFG.colors.bright : CFG.colors.mid))
+    });
+  }
+  function drawHeart(x, y, s, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot); ctx.scale(s/16, s/16);
+    ctx.beginPath();
+    ctx.moveTo(0, 4);
+    ctx.bezierCurveTo(-8, -6, -16, 4, 0, 14);
+    ctx.bezierCurveTo(16, 4, 8, -6, 0, 4);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  function drawStar(x, y, s, rot) {
+    ctx.save(); ctx.translate(x, y); ctx.rotate(rot);
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) {
+      const a = (Math.PI / 2) * i;
+      ctx.lineTo(Math.cos(a) * s, Math.sin(a) * s);
+      ctx.lineTo(Math.cos(a + Math.PI/4) * s * 0.32, Math.sin(a + Math.PI/4) * s * 0.32);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // ---- 背景の菱形グリッド ----
+  function drawDiamondGrid(pulse, light) {
+    const gap = 46;
+    ctx.save();
+    // 白背景では線を濃いめにして視認性を確保
+    ctx.strokeStyle = light
+      ? `rgba(${CFG.grid},${0.10 + pulse * 0.12})`
+      : `rgba(${CFG.grid},${0.05 + pulse * 0.10})`;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = -gap; x < W + gap; x += gap) {
+      ctx.moveTo(x, 0); ctx.lineTo(x + H, H);
+      ctx.moveTo(x, H); ctx.lineTo(x + H, 0);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  // ---- ビジュアライザー形状 ----
+  function barGradient(x1, y1, x2, y2) {
+    const g = ctx.createLinearGradient(x1, y1, x2, y2);
+    g.addColorStop(0, CFG.colors.deep);
+    g.addColorStop(0.6, CFG.colors.mid);
+    g.addColorStop(1, CFG.colors.bright);
+    return g;
+  }
+  // ランダムモーション用：各barに固有の位相・速度
+  const GATE = 0.04;                 // この音量以下は静止（補正なし）
+  const shimPhase = [], shimSpeed = [];
+  for (let i = 0; i < 128; i++) { shimPhase.push(Math.random() * Math.PI * 2); shimSpeed.push(1.5 + Math.random() * 3); }
+  let clock = 0;
+
+  // 音程に関係なく、音が入ったらランダムに動く（無音時は0＝静止）
+  // 音量で「動きの大きさ」を、ランダム波で「各barの上下」を決める
+  function randLevel(key, count, centered) {
+    if (smoothVol <= GATE) return 0;
+    const k = ((key % 128) + 128) % 128;
+    const a = Math.sin(clock * shimSpeed[k] + shimPhase[k]);
+    const b = Math.sin(clock * shimSpeed[(k + 11) % 128] * 0.7 + shimPhase[(k + 5) % 128]);
+    const r = (a * 0.6 + b * 0.4) * 0.5 + 0.5;     // 0..1 の滑らかなランダム
+    let env = 1;
+    if (centered) { const half = (count - 1) / 2; env = 1 - 0.4 * (Math.abs(key - half) / half); }
+    return r * (0.35 + smoothVol * 1.3) * env;
+  }
+
+  function drawShape() {
+    ctx.lineCap = 'round';
+    switch (CFG.shape) {
+      case 'bars':   drawBars(); break;
+      case 'mirror': drawMirror(); break;
+      case 'wave':   drawWave(); break;
+      default:       drawCircular();
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  function drawCircular() {
+    const baseR = Math.min(W, H) * 0.16 + smoothVol * 40;
+    const n = CFG.bars;
+    for (let i = 0; i < n; i++) {
+      const idx = i < n/2 ? i : (n - 1 - i);   // 左右対称
+      const v = randLevel(idx, n / 2, false);
+      const len = 8 + v * (Math.min(W, H) * 0.22);
+      const ang = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const x1 = CX + Math.cos(ang) * baseR, y1 = CY + Math.sin(ang) * baseR;
+      const x2 = CX + Math.cos(ang) * (baseR + len), y2 = CY + Math.sin(ang) * (baseR + len);
+      ctx.strokeStyle = barGradient(x1, y1, x2, y2);
+      ctx.lineWidth = 3 + v * 3;
+      ctx.shadowBlur = 12 + v * 20; ctx.shadowColor = CFG.colors.bright;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(CX, CY, baseR - 6, 0, Math.PI * 2);
+    ctx.strokeStyle = `rgba(${CFG.ring},${0.5 + smoothVol})`;
+    ctx.lineWidth = 2 + smoothVol * 3;
+    ctx.shadowBlur = 20 + smoothVol * 30; ctx.shadowColor = CFG.colors.bright;
+    ctx.stroke();
+  }
+
+  function drawBars() {
+    const n = 64, gap = 3;
+    const bw = (W / n) - gap;
+    const base = H * 0.92;
+    for (let i = 0; i < n; i++) {
+      const v = randLevel(i, n, true);
+      const h = 6 + v * (H * 0.42);
+      const x = i * (W / n) + gap / 2;
+      ctx.fillStyle = barGradient(x, base, x, base - h);
+      ctx.shadowBlur = 14 + v * 16; ctx.shadowColor = CFG.colors.bright;
+      const r = Math.min(bw / 2, 4);
+      ctx.beginPath();
+      ctx.moveTo(x, base);
+      ctx.lineTo(x, base - h + r);
+      ctx.arcTo(x, base - h, x + r, base - h, r);
+      ctx.lineTo(x + bw - r, base - h);
+      ctx.arcTo(x + bw, base - h, x + bw, base - h + r, r);
+      ctx.lineTo(x + bw, base);
+      ctx.closePath(); ctx.fill();
+    }
+  }
+
+  function drawMirror() {
+    const n = 72, gap = 3;
+    const bw = (W / n) - gap;
+    const mid = CY;
+    for (let i = 0; i < n; i++) {
+      const v = randLevel(i, n, true);
+      const h = 4 + v * (H * 0.24);
+      const x = i * (W / n) + gap / 2;
+      ctx.fillStyle = barGradient(x, mid - h, x, mid + h);
+      ctx.shadowBlur = 14 + v * 16; ctx.shadowColor = CFG.colors.bright;
+      ctx.fillRect(x, mid - h, bw, h * 2);
+    }
+  }
+
+  function drawWave() {
+    const mid = CY;
+    const points = 72;
+    // 音量で振幅を決定（無音時は0＝平らな線）
+    const amp = smoothVol <= GATE ? 0 : (H * 0.18) * (0.4 + smoothVol * 1.4);
+    ctx.beginPath();
+    for (let i = 0; i <= points; i++) {
+      const x = (i / points) * W;
+      const k = i % 128;
+      const yv = Math.sin(clock * shimSpeed[k] + shimPhase[k]) * 0.6
+               + Math.sin(clock * shimSpeed[(k + 9) % 128] * 0.6 + shimPhase[(k + 4) % 128]) * 0.4;
+      const edge = Math.sin((i / points) * Math.PI);   // 両端を抑えて中央がよく動く
+      const y = mid + yv * amp * edge;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    const g = ctx.createLinearGradient(0, 0, W, 0);
+    g.addColorStop(0, CFG.colors.deep);
+    g.addColorStop(0.5, CFG.colors.bright);
+    g.addColorStop(1, CFG.colors.deep);
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 3 + smoothVol * 4;
+    ctx.shadowBlur = 18 + smoothVol * 24; ctx.shadowColor = CFG.colors.bright;
+    ctx.stroke();
+  }
+
+  // ---- メインループ ----
+  const spec = new Uint8Array(BIN / 2);
+  const waveBuf = new Uint8Array(BIN);
+  let smoothVol = 0;
+
+  function frame() {
+    // データ取得
+    if (micActive && analyser) {
+      analyser.getByteFrequencyData(freq);
+      for (let i = 0; i < spec.length; i++) spec[i] = freq[i] || 0;
+      analyser.getByteTimeDomainData(timeData);
+      for (let i = 0; i < waveBuf.length; i++) waveBuf[i] = timeData[i] || 128;
+    } else {
+      demoSpectrum(spec);
+      demoWave(waveBuf);
+    }
+
+    // 全体音量
+    let sum = 0;
+    for (let i = 0; i < spec.length; i++) sum += spec[i];
+    const vol = (sum / spec.length / 255) * CFG.sensitivity;
+    smoothVol += (vol - smoothVol) * 0.2;
+    clock += 0.016;
+
+    // クリア
+    ctx.clearRect(0, 0, W, H);
+
+    // 背景グロー（音量で脈動）
+    if (CFG.bgMode === 'dark') {
+      const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W, H) * (0.4 + smoothVol * 0.25));
+      g.addColorStop(0, `rgba(${CFG.core},${0.32 + smoothVol * 0.4})`);
+      g.addColorStop(0.5, `rgba(${CFG.core},0.18)`);
+      g.addColorStop(1, 'rgba(5,1,2,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      drawDiamondGrid(smoothVol, false);
+    } else if (CFG.bgMode === 'light') {
+      const g = ctx.createRadialGradient(CX, CY, 0, CX, CY, Math.max(W, H) * (0.4 + smoothVol * 0.25));
+      g.addColorStop(0, `rgba(${CFG.core},${0.10 + smoothVol * 0.18})`);
+      g.addColorStop(0.55, `rgba(${CFG.core},0.04)`);
+      g.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+      drawDiamondGrid(smoothVol, true);
+    }
+
+    // ビジュアライザー形状を描画
+    drawShape();
+
+    // パーティクル生成（音量に応じて）
+    if (Math.random() < 0.2 + smoothVol * 0.8) spawnParticle(smoothVol);
+
+    // パーティクル更新・描画
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life++;
+      p.x += p.vx; p.y += p.vy; p.rot += p.vr;
+      p.vy *= 0.995;
+      const fadeIn = Math.min(1, p.life / 20);
+      const fadeOut = Math.max(0, 1 - (p.life - (p.maxLife - 40)) / 40);
+      p.alpha = fadeIn * Math.min(1, fadeOut);
+      if (p.life > p.maxLife || p.y < -30) { particles.splice(i, 1); continue; }
+      ctx.globalAlpha = p.alpha * (0.5 + smoothVol * 0.5);
+      ctx.fillStyle = p.hue;
+      ctx.shadowBlur = 10; ctx.shadowColor = p.hue;
+      if (p.kind === 'heart') drawHeart(p.x, p.y, p.size, p.rot);
+      else drawStar(p.x, p.y, p.size * 0.7, p.rot);
+    }
+    ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  // ---- UI配線 ----
+  const hud = document.getElementById('hud');
+  const gear = document.getElementById('gear');
+  // ボタングループ共通処理（クリックで選択＋ハイライト）
+  function wireGroup(id, cb) {
+    const grp = document.getElementById(id);
+    grp.addEventListener('click', e => {
+      const b = e.target.closest('button[data-v]');
+      if (!b) return;
+      grp.querySelectorAll('button').forEach(x => x.classList.remove('on'));
+      b.classList.add('on');
+      cb(b.dataset.v);
+    });
+  }
+  function setActive(id, val) {
+    const g = document.getElementById(id);
+    if (g) g.querySelectorAll('button').forEach(x => x.classList.toggle('on', x.dataset.v === val));
+  }
+
+  document.getElementById('micBtn').onclick = enableMic;
+  wireGroup('shape',    v => CFG.shape = v);
+  wireGroup('theme',    v => applyTheme(v));
+  wireGroup('particle', v => CFG.particleType = v);
+  wireGroup('bgmode',   v => setBg(v));
+  document.getElementById('gain').oninput = e => CFG.sensitivity = parseFloat(e.target.value);
+  document.getElementById('hideBtn').onclick = () => { hud.classList.add('hidden'); gear.style.display = 'flex'; };
+  gear.onclick = () => { hud.classList.remove('hidden'); gear.style.display = 'none'; };
+
+  // URLパラメータ: ?hud=0 でパネル非表示, ?bg=0 で透過
+  const params = new URLSearchParams(location.search);
+  if (params.get('hud') === '0') { hud.classList.add('hidden'); }
+  const bgp = params.get('bg');
+  if (bgp !== null) {
+    const mode = (bgp === '0' || bgp === 'transparent') ? 'transparent'
+               : (bgp === 'light') ? 'light' : 'dark';
+    setBg(mode);
+    setActive('bgmode', mode);
+  }
+  const sp = params.get('shape');
+  if (sp && ['circular','bars','mirror','wave'].includes(sp)) {
+    CFG.shape = sp;
+    setActive('shape', sp);
+  }
+  const th = params.get('theme');
+  if (th && THEMES[th]) {
+    applyTheme(th);
+    setActive('theme', th);
+  }
+  // ?mic=1 で読み込み時に自動でマイクを有効化（OBSでクリック不要にする）
+  if (params.get('mic') === '1') {
+    enableMic();
+  }
+})();
+</script>
+</body>
+</html>
