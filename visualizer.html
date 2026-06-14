@@ -342,7 +342,7 @@
       : `rgba(${CFG.grid},${0.05 + pulse * 0.10})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
-    for (let x = -gap; x < W + gap; x += gap) {
+    for (let x = -H - gap; x < W + gap; x += gap) {
       ctx.moveTo(x, 0); ctx.lineTo(x + H, H);
       ctx.moveTo(x, H); ctx.lineTo(x + H, 0);
     }
